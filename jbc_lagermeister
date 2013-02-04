@@ -1,0 +1,257 @@
+// Basic arduino sketch for the JBC fermentation controller:
+
+#include <LiquidCrystal.h>
+#include <OneWire.h>
+
+int COOLING_RELAY = 2;
+int HEATING_RELAY = 3;
+int LCD_1 = 9;
+int LCD_2 = 8;
+int LCD_3 = 7;
+int LCD_4 = 6;
+int LCD_5 = 5;
+int LCD_6 = 4;
+int ABOVE_LED = 16;
+int CORRECT_LED = 10;
+int BELOW_LED = 14;
+int THERMOMETER_PIN = A0;
+int TEMPERATURE_DIAL = A1;
+int UNIT_INPUT = 15;
+
+OneWire ds(THERMOMETER_PIN); // on digital pin 2
+
+int HEATING = -1;
+int NORMAL = -2;
+int COOLING = -3;
+int setting = 0;
+// CENTIGRADE is the canonical temperature for calculations.
+// This is just to pick what we display in.
+boolean CENTIGRADE = true;
+boolean FAHRENHEIT = false;
+boolean units = CENTIGRADE;
+
+double marginOfError = 1.5;
+double previousTemperature;
+double currentTemperature;
+double desiredTemperature;
+LiquidCrystal LCD(LCD_1,LCD_2,LCD_3,LCD_4,LCD_5,LCD_6);
+
+void setup() {
+  LCD.begin(16,2);
+  previousTemperature = getCurrentTemperature();
+}
+
+int i = 0;
+
+void loop() {
+    setUnits();
+    previousTemperature = currentTemperature;
+    // Check the current temperature
+    currentTemperature = getCurrentTemperature();
+    // Check the desired temperature
+    desiredTemperature = getDesiredTemperature();
+    // Determine the required action
+    calculateSetting();
+    setLEDs();
+    if (i == 0) {
+    // Set the heating/cooling based on measurements
+    setHeating();
+    }
+    // Set the display
+    setDisplay();
+    // Sleep until the next check - in this case, ten seconds.
+    i++;
+    i%=100;
+    delay(100);
+}
+
+void setUnits() {
+    if (digitalRead(UNIT_INPUT) == HIGH) {
+    units = FAHRENHEIT;
+  } 
+  else {
+    units = CENTIGRADE;
+  }  
+  // Set whether we're using fahrenheit or centigrade
+}
+
+double getCurrentTemperature(){
+//returns the temperature from one DS18S20 in DEG Celsius
+
+byte data[12];
+byte addr[8];
+
+if ( !ds.search(addr)) {
+//no more sensors on chain, reset search
+ds.reset_search();
+return -1000;
+}
+
+if ( OneWire::crc8( addr, 7) != addr[7]) {
+Serial.println("CRC is not valid!");
+return -1000;
+}
+
+if ( addr[0] != 0x10 && addr[0] != 0x28) {
+Serial.print("Device is not recognized");
+return -1000;
+}
+
+ds.reset();
+ds.select(addr);
+ds.write(0x44,1); // start conversion, with parasite power on at the end
+
+byte present = ds.reset();
+ds.select(addr);
+ds.write(0xBE); // Read Scratchpad
+
+
+for (int i = 0; i < 9; i++) { // we need 9 bytes
+data[i] = ds.read();
+}
+
+ds.reset_search();
+
+byte MSB = data[1];
+byte LSB = data[0];
+
+float tempRead = ((MSB << 8) | LSB); //using two's compliment
+double TemperatureSum = tempRead / 16;
+
+return TemperatureSum;
+
+}
+double getDesiredTemperature() {
+    // Read the temperature setting dial and convert from voltage to temperature
+    int val = analogRead(TEMPERATURE_DIAL);
+    val = map(val, 0, 1023, -400, 1000);
+    double d = 1.0 * val;
+    return d/10;
+}
+void calculateSetting() {
+    setting = NORMAL;
+    if (previousTemperature < currentTemperature) {
+        if (currentTemperature < desiredTemperature) {
+            setting = HEATING;
+        } else if (currentTemperature > desiredTemperature + marginOfError) {
+            setting = COOLING;
+        }
+    } else if (previousTemperature > currentTemperature) {
+        if (currentTemperature < desiredTemperature - marginOfError) {
+            setting = HEATING;
+        } else if (currentTemperature > desiredTemperature) {
+            setting = COOLING;
+        }
+    } else {
+        if (currentTemperature > desiredTemperature + marginOfError) {
+            setting = COOLING;
+        } else if (currentTemperature < desiredTemperature - marginOfError) {
+            setting = HEATING;
+        }
+    }
+}
+
+void setHeating() {
+    if (setting == HEATING) {
+      digitalWrite(COOLING_RELAY, LOW);
+      digitalWrite(HEATING_RELAY, HIGH);
+    } else if (setting == COOLING) {
+      digitalWrite(HEATING_RELAY, LOW);
+      digitalWrite(COOLING_RELAY, HIGH);
+    } else {
+      digitalWrite(HEATING_RELAY, LOW);
+      digitalWrite(COOLING_RELAY, LOW);
+    }
+}
+
+void setLEDs() {    
+    if (setting == HEATING) {
+      digitalWrite(ABOVE_LED, LOW);
+      digitalWrite(BELOW_LED, HIGH);
+      digitalWrite(CORRECT_LED, LOW);
+    } else if (setting == COOLING) {
+      digitalWrite(ABOVE_LED, HIGH);
+      digitalWrite(BELOW_LED, LOW);
+      digitalWrite(CORRECT_LED, LOW);
+    } else {
+      digitalWrite(ABOVE_LED, LOW);
+      digitalWrite(BELOW_LED, LOW);
+      digitalWrite(CORRECT_LED, HIGH);
+    }
+}
+
+void setDisplay() {
+    LCD.clear();
+    LCD.setCursor(0, 0);
+    LCD.print("Desired: ");
+    LCD.print(tempInUnits(desiredTemperature));
+    LCD.print(" " + unit());
+    //LCD.print(formatTemperature(desiredTemperature, 7));
+    LCD.setCursor(0, 1);
+    LCD.print("Current: ");
+    LCD.print(tempInUnits(currentTemperature));
+    LCD.print(" " + unit());
+    //LCD.print(formatTemperature(currentTemperature, 7));
+}
+String getOnesPlace(double num) {
+    int n = num;
+    if (n < 0) {
+        n *= -1;
+    }
+    n %= 10;
+    switch (n) {
+        case 0: return "0";
+        case 1: return "1";
+        case 2: return "2";
+        case 3: return "3";
+        case 4: return "4";
+        case 5: return "5";
+        case 6: return "6";
+        case 7: return "7";
+        case 8: return "8";
+        case 9: return "9";
+    }
+    return "";
+}
+String padFrontWithSpaces(String s, int size) {
+    // Pad the front of s with spaces to the desired size
+    // At the moment, I just can't remember how to find the length of a string in C
+    return s;
+}
+
+String unit() {
+    if (units == FAHRENHEIT) {
+        return "F";
+    } else {
+        return "C";
+    }
+}
+
+int tempInUnits(double temperature){
+      double t = temperature;
+    if (units == FAHRENHEIT) {
+        t *= 1.8;
+        t += 32;
+    }
+    return (int) t;
+}
+
+String formatTemperature(double temperature, int size) {
+    double t = temperature;
+    if (units == FAHRENHEIT) {
+        t *= 1.8;
+        t += 32;
+    }
+    // The following line converts the temperature to a string.
+    // It only works for temperatures less than 1000 degrees, but that's fine for this use.
+    // FIX THIS so that it doesn't have leading 0s
+    String s = "";
+    if (t >= 100) {
+    s += getOnesPlace(t/100);
+    }
+    if (t >= 10) {
+    s += getOnesPlace(t/10);    
+    }
+    s += getOnesPlace(t) + getOnesPlace(t * 10);
+    return padFrontWithSpaces(s + " " + unit(), size);
+}
